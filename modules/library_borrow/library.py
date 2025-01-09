@@ -145,20 +145,18 @@ class Book(metaclass=PoolMeta):
 
     @classmethod
     def getter_is_available(cls, books, name):
-        pool = Pool()
-        checkout = pool.get('library.user.checkout').__table__()
-        exemplary = pool.get('library.book.exemplary').__table__()
-        book = cls.__table__()
-        result = {x.id: False for x in books}
-        cursor = Transaction().connection.cursor()
-        cursor.execute(*book.join(exemplary,
-                condition=(exemplary.book == book.id)
-                ).join(checkout, 'LEFT OUTER',
-                condition=(exemplary.id == checkout.exemplary)
-                ).select(book.id,
-                where=(checkout.return_date != Null) | (checkout.id == Null)))
-        for book_id, in cursor.fetchall():
-            result[book_id] = True
+        Book = Pool().get('library.book')
+        books_ids = [x.id for x in books]
+        books = Book.search([('id', 'in', books_ids)])
+        result = {}
+        for book in books:
+            result[book.id] = False
+            for exemplary in book.exemplaries:
+                if exemplary.is_available:
+                    result[book.id] = True
+                    break
+                else:
+                    continue
         return result
 
     @classmethod
@@ -166,17 +164,17 @@ class Book(metaclass=PoolMeta):
         _, operator, value = clause
         if operator == '!=':
             value = not value
-        pool = Pool()
-        checkout = pool.get('library.user.checkout').__table__()
-        exemplary = pool.get('library.book.exemplary').__table__()
-        book = cls.__table__()
-        query = book.join(exemplary,
-            condition=(exemplary.book == book.id)
-            ).join(checkout, 'LEFT OUTER',
-            condition=(exemplary.id == checkout.exemplary)
-            ).select(book.id,
-            where=(checkout.return_date != Null) | (checkout.id == Null))
-        return [('id', 'in' if value else 'not in', query)]
+        Book = Pool().get('library.book')
+        books = Book.search([])
+        result = []
+        for book in books:
+            for exemplary in book.exemplaries:
+                if exemplary.is_available:
+                    result.append(book.id)
+                    break
+                else:
+                    continue
+        return [('id', 'in' if value else 'not in', result)]
 
 
 class Exemplary(metaclass=PoolMeta):
@@ -228,7 +226,7 @@ class Exemplary(metaclass=PoolMeta):
         checkout = pool.get('library.user.checkout').__table__()
         exemplary = cls.__table__()
         query = exemplary.join(checkout, 'LEFT OUTER',
-            condition=(exemplary.id == checkout.exemplary)
+            condition=(checkout.exemplary == exemplary.id)
             ).select(exemplary.id,
-            where=(checkout.return_date != Null) | (checkout.id == Null))
-        return [('id', 'in' if value else 'not in', query)]
+            where=((checkout.return_date == Null) & (checkout.id != Null)))
+        return [('id', 'in' if not value else 'not in', query)]
