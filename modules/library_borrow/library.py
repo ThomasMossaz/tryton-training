@@ -145,36 +145,52 @@ class Book(metaclass=PoolMeta):
 
     @classmethod
     def getter_is_available(cls, books, name):
-        Book = Pool().get('library.book')
+        book = Pool().get('library.book').__table__()
+        exemplary = Pool().get('library.book.exemplary').__table__()
+        checkout = Pool().get('library.user.checkout').__table__()
         books_ids = [x.id for x in books]
-        books = Book.search([('id', 'in', books_ids)])
-        result = {}
-        for book in books:
-            result[book.id] = False
-            for exemplary in book.exemplaries:
-                if exemplary.is_available:
-                    result[book.id] = True
-                    break
-                else:
-                    continue
-        return result
+        results = {x.id: False for x in books}
+
+        cursor = Transaction().connection.cursor()
+        sub_query = (checkout.select(checkout.exemplary,
+                where=(checkout.return_date == Null)))
+
+        cursor.execute(*book.join(exemplary,
+                        condition=(exemplary.book == book.id)
+                        ).join(sub_query ,'LEFT OUTER',
+                        condition=(sub_query.exemplary == exemplary.id)
+                        ).select(book.id, exemplary.id, sub_query.exemplary,
+                        where=book.id.in_(books_ids)))
+
+        for book_id, _, exemplary_borrowed in cursor.fetchall():
+            if not exemplary_borrowed:
+                results[book_id] = True
+        return results
 
     @classmethod
     def search_is_available(cls, name, clause):
         _, operator, value = clause
         if operator == '!=':
             value = not value
-        Book = Pool().get('library.book')
-        books = Book.search([])
-        result = []
-        for book in books:
-            for exemplary in book.exemplaries:
-                if exemplary.is_available:
-                    result.append(book.id)
-                    break
-                else:
-                    continue
-        return [('id', 'in' if value else 'not in', result)]
+        book = Pool().get('library.book').__table__()
+        exemplary = Pool().get('library.book.exemplary').__table__()
+        checkout = Pool().get('library.user.checkout').__table__()
+        results = set()
+
+        cursor = Transaction().connection.cursor()
+        sub_query = (checkout.select(checkout.exemplary,
+                where=(checkout.return_date == Null)))
+
+        cursor.execute(*book.join(exemplary,
+                        condition=(exemplary.book == book.id)
+                        ).join(sub_query ,'LEFT OUTER',
+                        condition=(sub_query.exemplary == exemplary.id)
+                        ).select(book.id, exemplary.id, sub_query.exemplary))
+
+        for book_id, _, exemplary_borrowed in cursor.fetchall():
+            if not exemplary_borrowed:
+                results.add(book_id)
+        return [('id', 'in' if value else 'not in', results)]
 
 
 class Exemplary(metaclass=PoolMeta):
